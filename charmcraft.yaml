@@ -1,0 +1,16 @@
+type: charm
+bases:
+  - name: ubuntu
+    channel: "22.04"
+
+parts:
+  charm:
+    build-packages:
+      - ca-certificates
+      - cargo
+      - git
+      - libffi-dev
+      - libssl-dev
+      - pkg-config
+      - python3-dev
+      - rustc

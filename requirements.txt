@@ -1,0 +1,2 @@
+ops >= 2.4
+pyopenssl
