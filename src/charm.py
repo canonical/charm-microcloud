@@ -526,7 +526,7 @@ class MaasMicroCloudCharm(CharmBase):
             for f in valid_names.intersection(tarball.getnames()):
                 tarball.extract(f, path=tmp_dir)
                 logger.debug(f"{f} was extracted from the tarball")
-                self._stored.lxd_snap_path = f"{tmp_dir}/{f}"
+                self._stored.microcloud_snap_path = f"{tmp_dir}/{f}"
                 break
             else:
                 logger.debug("Missing arch specific snap from tarball")
@@ -618,7 +618,7 @@ class MaasMicroCloudCharm(CharmBase):
         microcloud_debug: str = "/var/snap/microcloud/common/microcloud.debug"
 
         # A 0 byte file will unload the resource
-        if os.path.getsize(self._stored.lxd_binary_path) == 0:
+        if os.path.getsize(self._stored.microcloud_binary_path) == 0:
             logger.debug("Unloading side-loaded MicroCloud binary")
             if os.path.exists(microcloud_debug):
                 os.remove(microcloud_debug)
