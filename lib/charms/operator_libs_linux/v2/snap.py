@@ -64,6 +64,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -83,7 +84,7 @@ LIBAPI = 2
 
 # Increment this PATCH version before using `charmcraft publish-lib` or reset
 # to 0 if you are raising the major API version
-LIBPATCH = 4
+LIBPATCH = 9
 
 
 # Regex to locate 7-bit C1 ANSI sequences
@@ -319,7 +320,10 @@ class Snap(object):
                 Default is to return a string.
         """
         if typed:
-            config = json.loads(self._snap("get", ["-d", key]))
+            args = ["-d"]
+            if key:
+                args.append(key)
+            config = json.loads(self._snap("get", args))
             if key:
                 return config.get(key)
             return config
@@ -329,7 +333,7 @@ class Snap(object):
 
         return self._snap("get", [key]).strip()
 
-    def set(self, config: Dict[str, Any], *, typed: bool = False) -> str:
+    def set(self, config: Dict[str, Any], *, typed: bool = False) -> None:
         """Set a snap configuration value.
 
         Args:
@@ -337,11 +341,9 @@ class Snap(object):
            typed: set to True to convert all values in the config into typed values while
                 configuring the snap (set with typed=True). Default is not to convert.
         """
-        if typed:
-            kv = [f"{key}={json.dumps(val)}" for key, val in config.items()]
-            return self._snap("set", ["-t"] + kv)
-
-        return self._snap("set", [f"{key}={val}" for key, val in config.items()])
+        if not typed:
+            config = {k: str(v) for k, v in config.items()}
+        self._snap_client._put_snap_conf(self._name, config)
 
     def unset(self, key) -> str:
         """Unset a snap configuration value.
@@ -580,10 +582,20 @@ class Snap(object):
             # We are installing or refreshing a snap.
             if self._state not in (SnapState.Present, SnapState.Latest):
                 # The snap is not installed, so we install it.
+                logger.info(
+                    "Installing snap %s, revision %s, tracking %s", self._name, revision, channel
+                )
                 self._install(channel, cohort, revision)
-            else:
+                logger.info("The snap installation completed successfully")
+            elif revision is None or revision != self._revision:
                 # The snap is installed, but we are changing it (e.g., switching channels).
+                logger.info(
+                    "Refreshing snap %s, revision %s, tracking %s", self._name, revision, channel
+                )
                 self._refresh(channel=channel, cohort=cohort, revision=revision, devmode=devmode)
+                logger.info("The snap refresh completed successfully")
+            else:
+                logger.info("Refresh of snap %s was unnecessary", self._name)
 
         self._update_snap_apps()
         self._state = state
@@ -757,7 +769,33 @@ class SnapClient:
             headers["Content-Type"] = "application/json"
 
         response = self._request_raw(method, path, query, headers, data)
-        return json.loads(response.read().decode())["result"]
+        response = json.loads(response.read().decode())
+        if response["type"] == "async":
+            return self._wait(response["change"])
+        return response["result"]
+
+    def _wait(self, change_id: str, timeout=300) -> JSONType:
+        """Wait for an async change to complete.
+
+        The poll time is 100 milliseconds, the same as in snap clients.
+        """
+        deadline = time.time() + timeout
+        while True:
+            if time.time() > deadline:
+                raise TimeoutError(f"timeout waiting for snap change {change_id}")
+            response = self._request("GET", f"changes/{change_id}")
+            status = response["status"]
+            if status == "Done":
+                return response.get("data")
+            if status == "Doing" or status == "Do":
+                time.sleep(0.1)
+                continue
+            if status == "Wait":
+                logger.warning("snap change %s succeeded with status 'Wait'", change_id)
+                return response.get("data")
+            raise SnapError(
+                f"snap change {response.get('kind')!r} id {change_id} failed with status {status}"
+            )
 
     def _request_raw(
         self,
@@ -804,6 +842,10 @@ class SnapClient:
     def get_installed_snap_apps(self, name: str) -> List:
         """Query the snap server for apps belonging to a named, currently installed snap."""
         return self._request("GET", "apps", {"names": name, "select": "service"})
+
+    def _put_snap_conf(self, name: str, conf: Dict[str, Any]):
+        """Set the configuration details for an installed snap."""
+        return self._request("PUT", f"snaps/{name}/conf", body=conf)
 
 
 class SnapCache(Mapping):
